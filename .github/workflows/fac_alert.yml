@@ -1,0 +1,49 @@
+name: FAC Audit Alert
+
+on:
+  schedule:
+    - cron: '15 13 * * *'   # 9:15am ET (EDT = UTC-4)
+    - cron: '30 21 * * *'   # 5:30pm ET (EDT = UTC-4)
+  workflow_dispatch:         # allow manual trigger from GitHub
+
+jobs:
+  check-audits:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests python-dotenv
+
+      - name: Restore last check date
+        uses: actions/cache@v4
+        with:
+          path: last_check.json
+          key: fac-last-check-${{ runner.os }}
+          restore-keys: fac-last-check-
+
+      - name: Run FAC alert
+        env:
+          FAC_API_KEY: ${{ secrets.FAC_API_KEY }}
+          WATCH_STATE: ${{ secrets.WATCH_STATE }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          SMTP_HOST: smtp.gmail.com
+          SMTP_PORT: "587"
+          STATE_FILE: last_check.json
+        run: python fac_alert.py
+
+      - name: Save last check date
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: last_check.json
+          key: fac-last-check-${{ runner.os }}-${{ github.run_id }}
