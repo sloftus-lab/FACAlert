@@ -2,8 +2,7 @@ name: FAC Audit Alert
 
 on:
   schedule:
-    - cron: '15 13 * * *'   # 9:15am ET (EDT = UTC-4)
-    - cron: '30 21 * * *'   # 5:30pm ET (EDT = UTC-4)
+    - cron: '0 * * * *'     # every hour
   workflow_dispatch:         # allow manual trigger from GitHub
 
 jobs:
