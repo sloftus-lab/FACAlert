@@ -12,10 +12,11 @@ import json
 import os
 import smtplib
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
@@ -107,7 +108,7 @@ def build_email(audits: list[dict]) -> tuple[MIMEMultipart, list[str]]:
 
     lines = [
         f"Federal Audit Clearinghouse — {count} new audit{'s' if count != 1 else ''} for state: {WATCH_STATE}",
-        f"Checked at: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"Checked at: {datetime.now(ZoneInfo('America/New_York')).strftime('%Y-%m-%d %H:%M ET')}",
         "",
         "-" * 60,
     ]
@@ -143,7 +144,7 @@ def build_email(audits: list[dict]) -> tuple[MIMEMultipart, list[str]]:
     html = f"""
     <html><body>
     <h2>FAC Alert &mdash; {count} new audit{'s' if count != 1 else ''} in {WATCH_STATE}</h2>
-    <p>Checked at {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+    <p>Checked at {datetime.now(ZoneInfo('America/New_York')).strftime('%Y-%m-%d %H:%M ET')}</p>
     <table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse;font-family:monospace;font-size:13px;">
       <thead style="background:#e0e0e0;">
         <tr>
