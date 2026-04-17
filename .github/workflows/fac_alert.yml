@@ -5,6 +5,9 @@ on:
     - cron: '0 * * * *'     # every hour
   workflow_dispatch:         # allow manual trigger from GitHub
 
+permissions:
+  contents: write            # needed to commit last_check.json back to repo
+
 jobs:
   check-audits:
     runs-on: ubuntu-latest
@@ -21,13 +24,6 @@ jobs:
       - name: Install dependencies
         run: pip install requests python-dotenv
 
-      - name: Restore last check date
-        uses: actions/cache@v4
-        with:
-          path: last_check.json
-          key: fac-last-check-${{ runner.os }}
-          restore-keys: fac-last-check-
-
       - name: Run FAC alert
         env:
           FAC_API_KEY: ${{ secrets.FAC_API_KEY }}
@@ -40,9 +36,10 @@ jobs:
           STATE_FILE: last_check.json
         run: python fac_alert.py
 
-      - name: Save last check date
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: last_check.json
-          key: fac-last-check-${{ runner.os }}-${{ github.run_id }}
+      - name: Commit updated state
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_check.json
+          git diff --staged --quiet || git commit -m "state: update seen report IDs $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push

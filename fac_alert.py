@@ -3,6 +3,9 @@
 FAC Audit Alert
 Monitors the Federal Audit Clearinghouse (fac.gov) for new audits
 by state and sends email notifications via Gmail SMTP.
+
+State is tracked by report_id so the same audit is never emailed twice,
+even if the script runs multiple times on the same day.
 """
 
 import json
@@ -23,47 +26,52 @@ load_dotenv()
 # Config (from .env)
 # ---------------------------------------------------------------------------
 FAC_API_KEY    = os.environ["FAC_API_KEY"]
-WATCH_STATE    = os.environ["WATCH_STATE"].upper()          # e.g. "CA"
-EMAIL_FROM     = os.environ["EMAIL_FROM"]                   # Gmail address
-EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]               # Gmail App Password
-EMAIL_TO       = os.environ["EMAIL_TO"]                     # recipient(s), comma-separated
+WATCH_STATE    = os.environ["WATCH_STATE"].upper()
+EMAIL_FROM     = os.environ["EMAIL_FROM"]
+EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]
+EMAIL_TO       = os.environ["EMAIL_TO"]
 SMTP_HOST      = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT      = int(os.getenv("SMTP_PORT", "587"))
 
 STATE_FILE     = Path(os.getenv("STATE_FILE", "last_check.json"))
 BASE_URL       = "https://api.fac.gov"
-PAGE_SIZE      = 200                                        # max records per request
+PAGE_SIZE      = 200
+# Only look back this many days to avoid huge result sets
+LOOKBACK_DAYS  = 7
 
 
 # ---------------------------------------------------------------------------
-# State persistence — tracks the last date we checked
+# State persistence — tracks seen report IDs so we never double-alert
 # ---------------------------------------------------------------------------
 
-def load_last_check() -> str:
-    """Return the last-checked date string (YYYY-MM-DD), defaulting to yesterday."""
+def load_state() -> dict:
+    """Return state dict with 'seen_ids' (set) and 'since_date' (str)."""
     if STATE_FILE.exists():
         data = json.loads(STATE_FILE.read_text())
-        return data.get("last_check_date", _yesterday())
-    return _yesterday()
+        return {
+            "seen_ids":  set(data.get("seen_ids", [])),
+            "since_date": data.get("since_date", _lookback_date()),
+        }
+    return {"seen_ids": set(), "since_date": _lookback_date()}
 
 
-def save_last_check(check_date: str) -> None:
-    STATE_FILE.write_text(json.dumps({"last_check_date": check_date}, indent=2))
+def save_state(state: dict) -> None:
+    STATE_FILE.write_text(json.dumps({
+        "seen_ids":   sorted(state["seen_ids"]),
+        "since_date": state["since_date"],
+    }, indent=2))
 
 
-def _yesterday() -> str:
-    return (date.today() - timedelta(days=1)).isoformat()
+def _lookback_date() -> str:
+    return (date.today() - timedelta(days=LOOKBACK_DAYS)).isoformat()
 
 
 # ---------------------------------------------------------------------------
 # FAC API
 # ---------------------------------------------------------------------------
 
-def fetch_new_audits(since_date: str) -> list[dict]:
-    """
-    Query FAC /general for audits in WATCH_STATE accepted on or after since_date.
-    Handles pagination automatically.
-    """
+def fetch_audits(since_date: str) -> list[dict]:
+    """Query FAC /general for audits in WATCH_STATE accepted on or after since_date."""
     headers = {"X-Api-Key": FAC_API_KEY}
     params = {
         "auditee_state": f"eq.{WATCH_STATE}",
@@ -92,12 +100,11 @@ def fetch_new_audits(since_date: str) -> list[dict]:
 # Email
 # ---------------------------------------------------------------------------
 
-def build_email(audits: list[dict]) -> MIMEMultipart:
+def build_email(audits: list[dict]) -> tuple[MIMEMultipart, list[str]]:
     recipients = [r.strip() for r in EMAIL_TO.split(",")]
     count = len(audits)
     subject = f"[FAC Alert] {count} new audit{'s' if count != 1 else ''} in {WATCH_STATE}"
 
-    # Plain-text body
     lines = [
         f"Federal Audit Clearinghouse — {count} new audit{'s' if count != 1 else ''} for state: {WATCH_STATE}",
         f"Checked at: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
@@ -109,7 +116,7 @@ def build_email(audits: list[dict]) -> MIMEMultipart:
             f"Auditee:       {a.get('auditee_name', 'N/A')}",
             f"UEI:           {a.get('auditee_uei', 'N/A')}",
             f"Audit Year:    {a.get('audit_year', 'N/A')}",
-            f"Period:        {a.get('fy_start_date', 'N/A')} – {a.get('fy_end_date', 'N/A')}",
+            f"Period:        {a.get('fy_start_date', 'N/A')} \u2013 {a.get('fy_end_date', 'N/A')}",
             f"Accepted Date: {a.get('fac_accepted_date', 'N/A')}",
             f"Audit Type:    {a.get('audit_type', 'N/A')}",
             f"Findings:      {a.get('number_of_findings', 'N/A')}",
@@ -118,7 +125,6 @@ def build_email(audits: list[dict]) -> MIMEMultipart:
             "-" * 60,
         ]
 
-    # HTML body
     rows = ""
     for a in audits:
         report_id = a.get("report_id", "")
@@ -173,26 +179,32 @@ def send_email(msg: MIMEMultipart, recipients: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    last_check = load_last_check()
-    today      = date.today().isoformat()
+    state = load_state()
+    since_date = state["since_date"]
+    seen_ids   = state["seen_ids"]
 
-    print(f"Checking FAC for new audits in {WATCH_STATE} since {last_check} ...")
+    print(f"Checking FAC for new audits in {WATCH_STATE} since {since_date} ...")
+    print(f"Already seen {len(seen_ids)} report ID(s).")
 
     try:
-        audits = fetch_new_audits(last_check)
+        all_audits = fetch_audits(since_date)
     except requests.HTTPError as e:
         print(f"API error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Found {len(audits)} new audit(s).")
+    # Filter to only audits we haven't alerted on yet
+    new_audits = [a for a in all_audits if a.get("report_id") not in seen_ids]
+    print(f"Found {len(all_audits)} total audit(s), {len(new_audits)} new.")
 
-    if audits:
-        msg, recipients = build_email(audits)
+    if new_audits:
+        msg, recipients = build_email(new_audits)
         send_email(msg, recipients)
 
-    # Only advance the checkpoint after a successful run
-    save_last_check(today)
-    print(f"Last-check date updated to {today}.")
+    # Update state: add newly seen IDs, advance the since_date window
+    state["seen_ids"]   = seen_ids | {a["report_id"] for a in all_audits if a.get("report_id")}
+    state["since_date"] = _lookback_date()  # keep a rolling 7-day window
+    save_state(state)
+    print("State saved.")
 
 
 if __name__ == "__main__":
