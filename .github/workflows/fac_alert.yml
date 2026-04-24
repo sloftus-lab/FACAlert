@@ -1,9 +1,7 @@
 name: FAC Audit Alert
 
 on:
-  schedule:
-    - cron: '0 * * * *'     # every hour
-  workflow_dispatch:         # allow manual trigger from GitHub
+  workflow_dispatch:         # triggered by cron-job.org every hour, or manually via GitHub UI
 
 permissions:
   contents: write            # needed to commit last_check.json back to repo
