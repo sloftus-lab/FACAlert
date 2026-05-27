@@ -71,6 +71,25 @@ def _lookback_date() -> str:
 # FAC API
 # ---------------------------------------------------------------------------
 
+def _get_with_retry(url: str, headers: dict, params: dict, retries: int = 4, backoff: int = 15) -> requests.Response:
+    """GET with retry on 5xx errors or connection failures."""
+    import time
+    for attempt in range(1, retries + 1):
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=30)
+            if resp.status_code < 500:
+                resp.raise_for_status()
+                return resp
+            print(f"FAC API returned {resp.status_code} (attempt {attempt}/{retries}), retrying in {backoff}s...")
+        except requests.ConnectionError as e:
+            print(f"Connection error (attempt {attempt}/{retries}): {e}, retrying in {backoff}s...")
+        if attempt < retries:
+            time.sleep(backoff)
+            backoff *= 2
+    resp.raise_for_status()  # raise on final failure
+    return resp
+
+
 def fetch_audits(since_date: str) -> list[dict]:
     """Query FAC /general for audits in WATCH_STATE accepted on or after since_date."""
     headers = {"X-Api-Key": FAC_API_KEY}
@@ -84,8 +103,7 @@ def fetch_audits(since_date: str) -> list[dict]:
 
     results = []
     while True:
-        resp = requests.get(f"{BASE_URL}/general", headers=headers, params=params, timeout=30)
-        resp.raise_for_status()
+        resp = _get_with_retry(f"{BASE_URL}/general", headers=headers, params=params)
         page = resp.json()
         if not page:
             break
